@@ -1,0 +1,34 @@
+{
+  "concurrency": 3,
+  "max_rounds": 3,
+  "base_branch": "main",
+  "merge_method": "merge",
+  "labels": {
+    "queue": "factory",
+    "needs_info": "factory:needs-info",
+    "needs_human": "factory:needs-human"
+  },
+  "models": {
+    "fable": "claude-fable-5-2",
+    "opus": "claude-opus-5-5",
+    "sonnet": "claude-sonnet-5-5",
+    "haiku": "claude-haiku-5-5"
+  },
+  "roles": {
+    "intake": "opus",
+    "spec-writer": "opus",
+    "builder": "opus",
+    "approver": "opus"
+  },
+  "routing": {
+    "low": { "code": "haiku" },
+    "medium": { "code": "sonnet" },
+    "high": { "code": "sonnet" }
+  },
+  "surface_reviewers": {
+    "ui": { "ux": "sonnet", "ui": "haiku" },
+    "security": { "security": "opus" }
+  },
+  "protected_paths": [".github/workflows/*"],
+  "checks_cmd": "bash /app/checks.sh"
+}
