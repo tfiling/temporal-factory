@@ -2,6 +2,7 @@
 
 intake → route → spec → [build → gate → review]* → approve → merge, with escalation to a human
 (signals: human_feedback, reject, pr_merged). Ported from the v2 state machine in factory/bin/job.
+Keep features/temporal_factory/Pipeline flow.md in sync with any change here.
 """
 
 import asyncio

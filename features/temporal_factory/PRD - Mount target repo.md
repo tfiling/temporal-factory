@@ -11,7 +11,7 @@ tags: [prd, git, docker]
 The factory clones `TARGET_REPO` from GitHub into the `factory-data` Docker volume (`/data/repo`). That clone sits apart from the developer's local checkout (e.g. `~/code/barav_poc`), so:
 - the repo is downloaded again for every new volume or stack, which is redundant;
 - results can't be inspected locally until you `git fetch` in the local checkout;
-- the first run failed at clone time with a 403, which made the clone a point of failure.
+- the first run failed at clone time with a 403 (observed on the first run; not verifiable from the repo), which made the clone a point of failure.
 
 ## Goal
 Bind-mount the existing local checkout of the target repo at `/data/repo`. For each job the factory then:
@@ -32,7 +32,7 @@ Bind-mount the existing local checkout of the target repo at `/data/repo`. For e
 | Worktree from the latest `origin/main` | Already done: `git worktree add -b factory/<id> <repo>/.worktrees/<id> origin/<base>` (`git.py:29-31`), excluded through `.git/info/exclude`. | None. The behavior stays the same. |
 
 ## Requirements
-- **R1** `.env` gets `TARGET_REPO_PATH=/abs/path/to/local/checkout`. `TARGET_REPO` stays the `owner/repo` value used by `gh`.
+- **R1** `.env` gets a new, proposed variable (not in code yet) `TARGET_REPO_PATH=/abs/path/to/local/checkout`. `TARGET_REPO` stays the `owner/repo` value used by `gh`.
 - **R2** `docker-compose.yml` mounts `${TARGET_REPO_PATH}:/data/repo`. Job state stays in the `factory-data` volume (`/data/jobs`).
 - **R3** `setup_job` checks that `/data/repo/.git` exists and that the `origin` URL matches `TARGET_REPO`. Otherwise it fails with a non-retryable error. It never clones.
 - **R4** `setup_job` runs `git fetch origin <base>` before intake.
@@ -40,7 +40,7 @@ Bind-mount the existing local checkout of the target repo at `/data/repo`. For e
 - **R6** The factory never changes the host checkout's current branch, index or working files. It only adds `.worktrees/`, refs, and the `.git/info/exclude` entry.
 
 ## Assumptions
-- The mounted directory is never edited by hand. It stays on `main` and is treated as factory-managed.
+- The host checkout may be dirty or on another branch (see the `git fetch` row above); R6 keeps the factory from touching its branch, index or files.
 - All changes reach `main` through side branches, which live in worktrees under `.worktrees/` and are merged by PR.
 
 ## Known limitations
@@ -49,9 +49,9 @@ Bind-mount the existing local checkout of the target repo at `/data/repo`. For e
 ## Risks and open questions
 - **Auth:** if the host clone's `origin` is SSH (`git@github.com:…`), the container has no SSH key. `gh auth setup-git` only covers HTTPS. Options: require an HTTPS remote, or fetch and push through `https://github.com/$TARGET_REPO` explicitly.
 - **Intake's view of the repo:** should intake read the developer's working tree, or a clean `origin/main`? A clean read option is a read-only worktree, or `git show origin/main:<path>`.
-- **File ownership:** the container runs as uid 1000 (`Dockerfile`). On Linux hosts the mounted repo has to be writable by that uid. Docker Desktop on macOS handles this.
-- **Concurrent fetches:** parallel jobs that fetch the same repo can contend for ref locks. The `GIT` retry policy (5 attempts) should absorb that, but this needs confirming.
-- **Shared branches:** the local branch `factory/<id>` and its cleanup (`git branch -D` in `cleanup_worktree`) now happen in the developer's repo.
+- **File ownership:** the container runs as uid 1000 (`Dockerfile`). On Linux hosts the mounted repo has to be writable by that uid. Docker Desktop on macOS handles this (observed on the first run; not verifiable from the repo).
+- **Concurrent fetches:** parallel jobs that fetch the same repo can contend for ref locks. The `GIT` retry policy (5 attempts, `job.py:27-28`) should absorb that, but this needs confirming.
+- **Shared branches:** the local branch `factory/<id>` and its cleanup (`git branch -D` in `cleanup_worktree`, `merge.py:48`) now happen in the developer's repo.
 
 ## Acceptance criteria
 - With `TARGET_REPO_PATH` set, `factory.cli run <n>` makes no `gh repo clone` call, and its worktree's base commit equals `origin/main` right after the fetch.
