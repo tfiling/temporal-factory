@@ -1,0 +1,4 @@
+# Temporal server dynamic config (dev). See docs.temporal.io/references/dynamic-config
+system.forceSearchAttributesCacheRefreshOnRead:
+  - value: true
+    constraints: {}
