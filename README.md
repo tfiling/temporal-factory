@@ -11,6 +11,8 @@ A software factory built on [Temporal](https://temporal.io): durable workflows t
 Built iteratively: each iteration adds a new feature or improves an existing one. The flow is a Temporal port of the agentic pipeline in [`examples/software-factory-claude-code-v2`](examples/software-factory-claude-code-v2/README.md): the workflow code replaces the LLM orchestrator, and each agent is an activity that runs Claude via the Claude Agent SDK.
 
 ## Flow
+Diagrams: `features/temporal_factory/Pipeline flow.md` (update it whenever the flow changes).
+
 `issue (label: factory)` → intake → route → spec → [build → gate → review]* → approve → merge
 
 | Step | Implementation |
@@ -18,6 +20,9 @@ Built iteratively: each iteration adds a new feature or improves an existing one
 | intake, spec, build | agent activities (`factory/activities/agents.py`, prompts in `factory/prompts/`) |
 | route, gate, git, GitHub | deterministic activities |
 | stage and round logic | `JobWorkflow` (`factory/workflows/job.py`) |
+
+## Planning
+Features are planned as PRDs in an Obsidian vault: open `features/temporal_factory/` in Obsidian (one note per feature).
 
 ## Run (Docker only)
 ```
@@ -57,6 +62,8 @@ Target: `tfiling/barav_poc` (Express inventory app). Issue #1, "Add expiration d
 - Job state lives in `/data` inside the `factory-data` volume and the clone is at `/data/repo`; the local `~/code/barav_poc` is not used by the factory.
 
 ## Known gaps
+Tech debt and feature PRDs are tracked in the Obsidian vault at `features/temporal_factory/`. The entries below are first-run findings.
+
 - **Merge by hand** — the queue doesn't detect a PR merged on GitHub; send `factory.cli merged <issue>` (v2 noticed it on its own).
 When a job escalates (needs-human), it waits for a signal. If you merge the PR yourself on GitHub, nothing tells the workflow. v2's job queue checked PR state on every pass and marked the job merged. Here you have to run factory.cli merged <issue>, or the job sits in needs-human forever. The fix is to have the queue check PR state for waiting jobs, or to add a GitHub webhook.
 - **Reject timing** — `reject` and `feedback` are only acted on while a job waits in `needs-info` / `needs-human`.

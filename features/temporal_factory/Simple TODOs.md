@@ -1,0 +1,6 @@
+- Align our docker compose with the [suggested yaml by temporal](https://github.com/temporalio/temporal-server-operations/blob/main/compose/docker-compose.yml)
+	- Updated based on the the yaml [[docker compose setup#2nd revision]]
+	- Not yet properly manually verified and committed
+- Persistency for past runs
+- Proper arg parsing in cli.py(currently using argv naive manual parsing)
+- 
