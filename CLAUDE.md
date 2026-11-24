@@ -8,8 +8,8 @@ Temporal port of the v2 software factory in `examples/software-factory-claude-co
 - Start a job: `docker compose run --rm worker python -m factory.cli run <issue>`
 
 ## Planning and tech debt
-- Feature plans (PRDs) and tech debt live in the Obsidian vault `features/temporal_factory/` (one note per item); add or update a note there before building a feature, and record new debt there, not in context files.
-- Known limitations: `features/temporal_factory/Known limitations/README.md` (index, one line each); check it before changing mounts, paths or host/OS assumptions and always make sure it is up to date with any changes you make
+- Feature plans (PRDs) live in the Obsidian vault `features/temporal_factory/` (one note per item); add or update a note there before building a feature.
+- Tech debt, gaps and limitations: one note each in `features/temporal_factory/Known limitations/`, indexed one line each in its `README.md`; record new ones there, not in context files, check it before changing mounts, paths or host/OS assumptions, and keep it up to date with your changes
 
 ## Layout
 - `factory/workflows/job.py` — JobWorkflow (stage logic; deterministic, no IO). Diagram: `features/temporal_factory/Pipeline flow.md` (keep it current)
