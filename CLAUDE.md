@@ -9,6 +9,7 @@ Temporal port of the v2 software factory in `examples/software-factory-claude-co
 
 ## Planning and tech debt
 - Feature plans (PRDs) live in the Obsidian vault `features/temporal_factory/` (one note per item); add or update a note there before building a feature.
+- Future implementation tasks (refactors, small features) are tracked as one note each in `features/temporal_factory/Tasks/` (frontmatter `status: todo|doing|done`); create the note before starting, update its status and notes as work progresses, and mark it done when finished. Small items can go in `Tasks/Simple TODOs.md`.
 - Tech debt, gaps and limitations: one note each in `features/temporal_factory/Known limitations/`, indexed one line each in its `README.md`; record new ones there, not in context files, check it before changing mounts, paths or host/OS assumptions, and keep it up to date with your changes
 
 ## Layout

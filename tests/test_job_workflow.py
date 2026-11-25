@@ -9,7 +9,7 @@ from temporalio.worker import Worker
 
 from factory.models import (AGENTS_QUEUE, GIT_QUEUE, ORCHESTRATION_QUEUE, AgentRequest, AgentResult,
                             BuildResult, DecisionResult, GateResult, IntakeResult, Job, MergeResult,
-                            PrInfo, ReviewResult)
+                            PrInfo, ReviewResult, Stage)
 from factory.workflows.job import JobWorkflow
 
 JOB = Job("001-x", 1, "x", "/d", "/r", "/w", "factory/001-x", "main", max_rounds=3)
@@ -76,7 +76,7 @@ async def run_job(signals=(), **kw):
 
 async def test_happy_path_approved_and_merged_in_round_one():
     stage, status = await run_job()
-    assert stage == "merged" and status["round"] == 1 and status["waits"] == 0
+    assert stage == Stage.MERGED and status["round"] == 1 and status["waits"] == 0
     assert status["pr_url"].endswith("/pull/7")
     assert CALLS.count("run_reviewer") == 2  # one per routed lens
     order = [CALLS.index(c) for c in ("run_gate", "ensure_pr", "run_reviewer", "run_approver", "sync_and_merge",
@@ -86,61 +86,61 @@ async def test_happy_path_approved_and_merged_in_round_one():
 
 async def test_needs_info_waits_and_rejection_ends_the_job():
     stage, _ = await run_job(decision=("NEEDS-INFO",), signals=[REJECT])
-    assert stage == "rejected" and "run_spec_writer" not in CALLS and "reject_job" in CALLS
+    assert stage == Stage.REJECTED and "run_spec_writer" not in CALLS and "reject_job" in CALLS
 
 
 async def test_reject_at_intake():
     stage, _ = await run_job(decision=("REJECT",))
-    assert stage == "rejected"
+    assert stage == Stage.REJECTED
 
 
 async def test_gate_fail_loops_back_to_build_without_reviewing():
     stage, status = await run_job(gates=("FAIL", "PASS"))
-    assert stage == "merged" and status["round"] == 2
+    assert stage == Stage.MERGED and status["round"] == 2
     assert CALLS.count("run_builder") == 2 and CALLS.count("run_reviewer") == 2
 
 
 async def test_review_changes_loops_back_to_build():
     stage, status = await run_job(gates=("PASS", "PASS"), reviews=(("PASS", "CHANGES"), ("PASS",)))
-    assert stage == "merged" and status["round"] == 2
+    assert stage == Stage.MERGED and status["round"] == 2
     assert CALLS.count("run_builder") == 2 and CALLS.count("ensure_pr") == 1
 
 
 async def test_approver_escalation_then_pr_merged_by_hand():
     stage, status = await run_job(approvals=("ESCALATE",), signals=[("pr_merged",)])
-    assert stage == "merged" and "sync_and_merge" not in CALLS and status["waits"] == 1
+    assert stage == Stage.MERGED and "sync_and_merge" not in CALLS and status["waits"] == 1
 
 
 async def test_approver_escalation_then_reject():
     stage, _ = await run_job(approvals=("ESCALATE",), signals=[REJECT])
-    assert stage == "rejected" and "reject_job" in CALLS and "cleanup_worktree" in CALLS
+    assert stage == Stage.REJECTED and "reject_job" in CALLS and "cleanup_worktree" in CALLS
 
 
 async def test_merge_failure_escalates_and_feedback_runs_another_round():
     stage, status = await run_job(gates=("PASS", "PASS"), approvals=("APPROVE", "APPROVE"),
                                   merges=(False, True), signals=[("human_feedback", "rebase please")])
-    assert stage == "merged" and status["round"] == 2 and status["waits"] == 1
+    assert stage == Stage.MERGED and status["round"] == 2 and status["waits"] == 1
     assert "write_feedback" in CALLS and CALLS.count("sync_and_merge") == 2
 
 
 async def test_round_budget_exhausted_escalates_and_feedback_resets_budget():
     stage, status = await run_job(gates=("PASS",) * 4, reviews=(("CHANGES",),) * 3 + (("PASS",),),
                                   signals=[("human_feedback", "try the other approach")])
-    assert stage == "merged" and status["round"] == 4 and status["waits"] == 1
+    assert stage == Stage.MERGED and status["round"] == 4 and status["waits"] == 1
     assert CALLS.count("run_builder") == 4
 
 
 async def test_gate_fails_every_round_escalates_without_reviewing():
     stage, _ = await run_job(gates=("FAIL",) * 3, signals=[REJECT])
-    assert stage == "rejected" and "run_reviewer" not in CALLS and "ensure_pr" not in CALLS
+    assert stage == Stage.REJECTED and "run_reviewer" not in CALLS and "ensure_pr" not in CALLS
 
 
 async def test_blocked_builder_escalates():
     stage, _ = await run_job(build="BLOCKED", signals=[REJECT])
-    assert stage == "rejected" and "run_gate" not in CALLS
+    assert stage == Stage.REJECTED and "run_gate" not in CALLS
 
 
 async def test_needs_info_resumes_intake_after_author_replies():
     stage, status = await run_job(decision=("NEEDS-INFO", "ACCEPT"), signals=[("author_replied",)])
-    assert stage == "merged" and status["waits"] == 1
+    assert stage == Stage.MERGED and status["waits"] == 1
     assert CALLS.count("run_intake") == 2 and "restart_intake" in CALLS

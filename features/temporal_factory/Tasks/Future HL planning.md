@@ -1,0 +1,6 @@
+- Fine tune the part where the factory decides to not merge and wait for a human CR - so far 3/3 PRs did not ask for a CR. We need to find the threshold and see if we like it
+- Implement workflow for CR ping pong with human: 
+	- Approver escalated to human CR
+	- Human reviewer requested changes and made comments to the PR
+	- The request for changes triggers an agent similar to the spec writer that would update the spec or simply extend it following the comments
+- 

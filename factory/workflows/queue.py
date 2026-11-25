@@ -14,11 +14,11 @@ from temporalio.workflow import ParentClosePolicy
 
 with workflow.unsafe.imports_passed_through():
     from factory.activities.github import list_queue_issues
-    from factory.models import GIT_QUEUE, ORCHESTRATION_QUEUE, JobState, QueueInput
+    from factory.models import GIT_QUEUE, ORCHESTRATION_QUEUE, JobState, QueueInput, Stage
     from factory.workflows.job import JobWorkflow
 
-TERMINAL = {"merged", "rejected", "failed"}
-WAITING = {"needs-info", "needs-human"}
+TERMINAL = {Stage.MERGED, Stage.REJECTED, Stage.FAILED}
+WAITING = {Stage.NEEDS_INFO, Stage.NEEDS_HUMAN}
 QUEUE_ID = "factory-queue"
 
 
@@ -46,7 +46,7 @@ class FactoryQueueWorkflow:
     @workflow.query
     def status(self) -> dict:
         return {"working": self._working(),
-                "jobs": {k: {"stage": j.stage, "cost_usd": j.cost_usd} for k, j in self.jobs.items()}}
+                "jobs": {k: {"stage": j.stage.value, "cost_usd": j.cost_usd} for k, j in self.jobs.items()}}
 
     def _working(self) -> int:
         return sum(1 for j in self.jobs.values() if j.stage not in WAITING)
@@ -63,7 +63,7 @@ class FactoryQueueWorkflow:
                 if issue.needs_info and issue.replied and self._working() < snap.concurrency:
                     try:
                         await workflow.get_external_workflow_handle(job_id(issue.number)).signal("author_replied")
-                        self.jobs[key] = JobState(issue.number, "resuming", self.jobs[key].cost_usd
+                        self.jobs[key] = JobState(issue.number, Stage.RESUMING, self.jobs[key].cost_usd
                                                   if key in self.jobs else 0.0)
                     except TemporalError:
                         pass  # no running job for this issue
@@ -75,7 +75,7 @@ class FactoryQueueWorkflow:
                             id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY)
                     except WorkflowAlreadyStartedError:
                         continue  # already running (e.g. started by the CLI) or finished
-                    self.jobs[key] = JobState(issue.number, "starting")
+                    self.jobs[key] = JobState(issue.number, Stage.STARTING)
 
             if workflow.info().is_continue_as_new_suggested():
                 workflow.continue_as_new(QueueInput(inp.poll_seconds, self.jobs))

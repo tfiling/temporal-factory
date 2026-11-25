@@ -1,8 +1,28 @@
 from dataclasses import dataclass, field
+from enum import Enum
 
 ORCHESTRATION_QUEUE = "factory-orchestration"
 AGENTS_QUEUE = "factory-agents"
 GIT_QUEUE = "factory-git"
+
+
+class Stage(str, Enum):
+    """Job stage. A str enum with the exact historical values, so it serializes as a plain string."""
+    STARTING = "starting"
+    INTAKE = "intake"
+    NEEDS_INFO = "needs-info"
+    SPEC = "spec"
+    BUILD = "build"
+    GATE = "gate"
+    REVIEW = "review"
+    APPROVE = "approve"
+    MERGING = "merging"
+    NEEDS_HUMAN = "needs-human"
+    MERGED = "merged"
+    REJECTED = "rejected"
+    FAILED = "failed"  # only sent via _notify, never stored in JobWorkflow.stage
+    RESUMING = "resuming"  # set by FactoryQueueWorkflow only
+
 
 
 @dataclass
@@ -132,7 +152,7 @@ class QueueSnapshot:
 class JobState:
     """Sent by a JobWorkflow to the queue whenever it starts waiting, resumes or ends."""
     issue: int
-    stage: str
+    stage: Stage
     cost_usd: float = 0.0
 
 
