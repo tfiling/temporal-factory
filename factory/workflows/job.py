@@ -32,8 +32,8 @@ MERGE = dict(task_queue=GIT_QUEUE, start_to_close_timeout=timedelta(minutes=45),
              retry_policy=RetryPolicy(maximum_attempts=2))  # idempotent: checks PR state first
 
 
-def agent(minutes: int) -> dict:
-    return dict(task_queue=AGENTS_QUEUE, start_to_close_timeout=timedelta(minutes=minutes),
+def agent_opts(timeout_minutes: int) -> dict:
+    return dict(task_queue=AGENTS_QUEUE, start_to_close_timeout=timedelta(minutes=timeout_minutes),
                 heartbeat_timeout=timedelta(minutes=3), retry_policy=RetryPolicy(maximum_attempts=2))
 
 
@@ -116,7 +116,7 @@ class JobWorkflow:
         reviewed | retry (message for the next round, why if none is left) | escalate (why)."""
         self.stage = Stage.BUILD
         build = await workflow.execute_activity(
-            run_builder, AgentRequest(job, "builder", message, round=rnd, session_id=self._session), **agent(60))
+            run_builder, AgentRequest(job, "builder", message, round=rnd, session_id=self._session), **agent_opts(60))
         self.cost_usd += build.agent.cost_usd
         self._session = build.agent.session_id or self._session
         if build.status == "BLOCKED":
@@ -140,7 +140,7 @@ class JobWorkflow:
         reviews = await asyncio.gather(*(
             workflow.execute_activity(
                 run_reviewer, AgentRequest(job, f"reviewer-{lens}", f"Review round {rnd}.", round=rnd, model=model),
-                **agent(30))
+                **agent_opts(30))
             for lens, model in reviewers.items()))
         self.cost_usd += sum(r.cost_usd for r in reviews)
         changes = ", ".join(r.lens for r in reviews if r.verdict == "CHANGES")
@@ -164,72 +164,96 @@ class JobWorkflow:
 
     async def _run(self, issue: int) -> Stage:
         job = await workflow.execute_activity(setup_job, issue, **GIT)
+        intake = await self._intake(job)
+        if intake is None:  # rejected while waiting for the author
+            return await self._finish(job, Stage.REJECTED)
+        if intake.decision == "REJECT":
+            return await self._reject_at_intake(job, intake)
+        reviewers = await self._prepare(job, intake)
+        return await self._build_rounds(job, reviewers)
 
+    @staticmethod
+    def _intake_comment(intake) -> str:
+        return f"### Factory intake: {intake.decision}\n\n{intake.body}"
+
+    async def _intake(self, job):
+        """Run intake, asking the author for info until it decides. Returns None if rejected meanwhile."""
         while True:  # intake repeats after each author reply
             self.stage = Stage.INTAKE
             intake = await workflow.execute_activity(
-                run_intake, AgentRequest(job, "intake", "Decide this issue and write intake.md."), **agent(15))
+                run_intake, AgentRequest(job, "intake", "Decide this issue and write intake.md."), **agent_opts(15))
             self.cost_usd += intake.agent.cost_usd
-            title = f"### Factory intake: {intake.decision}\n\n{intake.body}"
             if intake.decision != "NEEDS-INFO":
-                break
-            await workflow.execute_activity(comment_issue, Comment(issue, title), **GIT)
-            await workflow.execute_activity(edit_labels, LabelChange(issue, add=["needs_info"]), **GIT)
-            self.stage, self.waits = Stage.NEEDS_INFO, self.waits + 1
-            await self._notify()
-            await workflow.wait_condition(lambda: self._replied or self._rejection is not None)
-            if self._rejection is not None:
-                await workflow.execute_activity(reject_job, TextArgs(job, self._rejection), **GIT)
-                return await self._finish(job, Stage.REJECTED)
-            self._replied = False
-            await workflow.execute_activity(restart_intake, job, **GIT)
+                return intake
+            if not await self._wait_for_author(job, intake):
+                return None
 
-        if intake.decision == "REJECT":
-            await workflow.execute_activity(comment_issue, Comment(issue, title), **GIT)
-            await workflow.execute_activity(edit_labels, LabelChange(issue, remove=["queue"]), **GIT)
-            self.stage = Stage.REJECTED
-            return self.stage
+    async def _wait_for_author(self, job, intake) -> bool:
+        """Ask the author for info and wait. Returns False if the job was rejected instead."""
+        await workflow.execute_activity(comment_issue, Comment(job.issue, self._intake_comment(intake)), **GIT)
+        await workflow.execute_activity(edit_labels, LabelChange(job.issue, add=["needs_info"]), **GIT)
+        self.stage, self.waits = Stage.NEEDS_INFO, self.waits + 1
+        await self._notify()
+        await workflow.wait_condition(lambda: self._replied or self._rejection is not None)
+        if self._rejection is not None:
+            await workflow.execute_activity(reject_job, TextArgs(job, self._rejection), **GIT)
+            return False
+        self._replied = False
+        await workflow.execute_activity(restart_intake, job, **GIT)
+        return True
 
+    async def _reject_at_intake(self, job, intake) -> Stage:
+        await workflow.execute_activity(comment_issue, Comment(job.issue, self._intake_comment(intake)), **GIT)
+        await workflow.execute_activity(edit_labels, LabelChange(job.issue, remove=["queue"]), **GIT)
+        self.stage = Stage.REJECTED
+        return self.stage
+
+    async def _prepare(self, job, intake) -> dict:
+        """Route, announce intake, create the worktree and write the spec. Returns the reviewers."""
         reviewers = await workflow.execute_local_activity(
             route_job, intake, start_to_close_timeout=timedelta(seconds=10))
-        await workflow.execute_activity(comment_issue, Comment(issue, title), **GIT)
+        await workflow.execute_activity(comment_issue, Comment(job.issue, self._intake_comment(intake)), **GIT)
         await workflow.execute_activity(create_worktree, job, **GIT)
 
         self.stage = Stage.SPEC
         spec = await workflow.execute_activity(
-            run_spec_writer, AgentRequest(job, "spec-writer", "Write spec.md."), **agent(30))
+            run_spec_writer, AgentRequest(job, "spec-writer", "Write spec.md."), **agent_opts(30))
         self.cost_usd += spec.cost_usd
+        return reviewers
 
-        message, rnd, limit = "Build the spec.", 0, job.max_rounds  # feedback restarts the budget
+    async def _build_rounds(self, job, reviewers: dict) -> Stage:
+        """Build rounds until merged or a human ends the job; human feedback restarts the round budget."""
+        message, rnd, limit = "Build the spec.", 0, job.max_rounds
         while True:
             rnd += 1
             self.round = rnd
             kind, next_message, why = await self._round(job, reviewers, rnd, message)
-
-            if kind == "reviewed":
-                self.stage = Stage.APPROVE
-                decision = await workflow.execute_activity(
-                    run_approver,
-                    AgentRequest(job, "approver", f"PR: #{self.pr_number} {self.pr_url}. Final round: {rnd}.",
-                                 round=rnd), **agent(30))
-                self.cost_usd += decision.agent.cost_usd
-                approved = decision.decision == "APPROVE"
-                if approved:
-                    self.stage = Stage.MERGING
-                    merge = await workflow.execute_activity(
-                        sync_and_merge, MergeRequest(job, self.pr_number, rnd), **MERGE)
-                    if merge.merged:
-                        return await self._finish(job, Stage.MERGED)
-                    why = merge.detail
-                else:
-                    why = decision.body
-                stage, message = await self._wait_for_human(job, why, rnd, write_decision=approved)
-            elif kind == "retry" and rnd < limit:
+            if kind == "retry" and rnd < limit:
                 message = next_message
                 continue
-            else:  # escalate now, or a retry with no rounds left
-                stage, message = await self._wait_for_human(job, why, rnd)
 
+            write_decision = True
+            if kind == "reviewed":
+                merged, why, write_decision = await self._approve_and_merge(job, rnd)
+                if merged:
+                    return await self._finish(job, Stage.MERGED)
+            # else: escalate now, or a retry with no rounds left
+            stage, message = await self._wait_for_human(job, why, rnd, write_decision)
             if stage:
                 return stage
             limit = rnd + job.max_rounds
+
+    async def _approve_and_merge(self, job, rnd: int) -> tuple[bool, str, bool]:
+        """Returns (merged, why not, approved)."""
+        self.stage = Stage.APPROVE
+        decision = await workflow.execute_activity(
+            run_approver,
+            AgentRequest(job, "approver", f"PR: #{self.pr_number} {self.pr_url}. Final round: {rnd}.", round=rnd),
+            **agent_opts(30))
+        self.cost_usd += decision.agent.cost_usd
+        if decision.decision != "APPROVE":
+            return False, decision.body, False
+
+        self.stage = Stage.MERGING
+        merge = await workflow.execute_activity(sync_and_merge, MergeRequest(job, self.pr_number, rnd), **MERGE)
+        return merge.merged, merge.detail, True
