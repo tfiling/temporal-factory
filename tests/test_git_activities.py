@@ -3,8 +3,8 @@
 from pathlib import Path
 
 from factory.activities.git import create_worktree
-from factory.models import Job
-from factory.shell import run
+from factory.core.models import Job
+from factory.core.shell import run
 
 
 def test_worktree_inside_clone_is_excluded_and_idempotent(tmp_path):

@@ -78,7 +78,10 @@ services:
     ports: ["8080:8080"]
 
   worker:
-    build: .
+    build:
+      context: .
+      args:
+        FACTORY_VERSION: ${FACTORY_VERSION:-unknown}  # set by scripts/lib.sh
     restart: on-failure
     depends_on:
       temporal-namespace: { condition: service_completed_successfully }

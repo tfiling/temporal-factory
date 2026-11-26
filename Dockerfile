@@ -14,6 +14,10 @@ COPY factory ./factory
 COPY tests ./tests
 RUN pip install --no-cache-dir -e ".[dev]"
 
+# Last, so a new version doesn't invalidate the layers above.
+ARG FACTORY_VERSION=unknown
+ENV FACTORY_VERSION=$FACTORY_VERSION
+
 USER factory
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["python", "-m", "factory.worker"]

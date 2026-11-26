@@ -4,9 +4,9 @@ from pathlib import Path
 
 from temporalio import activity
 
-from factory.models import Job
-from factory.parsing import first_line
-from factory.shell import run
+from factory.core.models import Job
+from factory.core.parsing import first_line
+from factory.core.shell import run
 
 
 def _git(job: Job, *args: str, check: bool = True):

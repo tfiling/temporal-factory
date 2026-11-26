@@ -6,9 +6,9 @@ from pathlib import Path
 
 from temporalio import activity
 
-from factory.config import load_config
-from factory.models import GateRequest, GateResult
-from factory.shell import run
+from factory.core.config import load_config
+from factory.core.models import GateRequest, GateResult
+from factory.core.shell import run
 
 TAIL = 80
 

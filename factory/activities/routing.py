@@ -1,8 +1,8 @@
 from temporalio import activity
 
-from factory.config import load_config
-from factory.models import IntakeResult
-from factory.routing import route
+from factory.core.config import load_config
+from factory.core.models import IntakeResult
+from factory.core.routing import route
 
 
 @activity.defn

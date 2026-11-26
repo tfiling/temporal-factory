@@ -7,10 +7,10 @@ from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from factory.config import load_config
-from factory.models import (AgentRequest, AgentResult, BuildResult, DecisionResult, IntakeResult,
+from factory.core.config import load_config
+from factory.core.models import (AgentRequest, AgentResult, BuildResult, DecisionResult, IntakeResult,
                             ReviewResult)
-from factory.parsing import body_after_header, first_line, header, section
+from factory.core.parsing import body_after_header, first_line, header, section
 
 PROMPTS = Path(__file__).parents[1] / "prompts"
 TOOLS = {

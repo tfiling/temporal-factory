@@ -6,9 +6,9 @@ from temporalio import activity
 
 from factory.activities.gate import do_gate
 from factory.activities.github import gh, gh_json
-from factory.config import load_config
-from factory.models import GateRequest, Job, MergeRequest, MergeResult
-from factory.shell import run
+from factory.core.config import load_config
+from factory.core.models import GateRequest, Job, MergeRequest, MergeResult
+from factory.core.shell import run
 
 
 @activity.defn

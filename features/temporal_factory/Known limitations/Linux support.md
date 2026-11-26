@@ -1,5 +1,5 @@
 ---
-type: limitations
+type: known-limitation
 status: living
 created: 2026-11-23
 tags: [limitations, linux, macos]

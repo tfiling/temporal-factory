@@ -26,48 +26,50 @@ The Temporal-specific choices in the factory, with where each lives in the code.
 
 | Decision | Where | Why |
 |---|---|---|
-| Three task queues: `factory-orchestration`, `factory-agents`, `factory-git` | `factory/models.py:3-5`, `worker.py:17-29` | Long Claude agent calls (up to 60 min) don't compete with quick git/GitHub calls, and the queues can be scaled separately later. |
-| All three workers in one process | `worker.py` | Simplest deploy. Splitting them is just separate containers on the same queues. |
-| Sync activities run on a shared `ThreadPoolExecutor(16)`; agent activities are `async` | `worker.py:16`, `activities/agents.py` | git/gh calls are blocking subprocesses. The Agent SDK is async and streams. |
-| Workflow imports through `workflow.unsafe.imports_passed_through()` | `workflows/job.py:15`, `queue.py:15` | Keeps the sandbox from re-importing activity modules (subprocess, SDK) on every replay. |
+| Three task queues: `factory-orchestration`, `factory-agents`, `factory-git` | `factory/core/models.py`, `factory/activities/__init__.py` (`ALL_BY_QUEUE`), `worker.py` | Long Claude agent calls (up to 60 min) don't compete with quick git/GitHub calls, and the queues can be scaled separately later. |
+| All three workers in one process; only the orchestration worker registers workflows (`FactoryQueueWorkflow` and every `FLOWS` workflow) | `worker.py` | Simplest deploy. Splitting them is just separate containers on the same queues. |
+| Sync activities run on a shared `ThreadPoolExecutor(16)`; agent activities are `async` | `worker.py:20`, `activities/agents.py` | git/gh calls are blocking subprocesses. The Agent SDK is async and streams. |
+| Startup config check: the worker exits if a flow with a `label` isn't issue-driven | `worker.py`, `flows/registry.py` (`config_errors`) | The queue could never start such a flow; fail at boot, not at runtime. |
+| Only `factory.activities.*` and `factory.core.*` imported through `workflow.unsafe.imports_passed_through()` | every module under `factory/flows/` | Keeps the sandbox from re-importing activity modules (subprocess, SDK), while workflow code is imported normally so the sandbox rejects time, random and IO calls in it. |
 
 ## Workflows
 
 | Decision | Where | Why |
 |---|---|---|
-| One `JobWorkflow` per issue, ID `factory-job-<issue>` | `cli.py`, `queue.py:job_id` | A deterministic ID addresses the job from the CLI (signals/queries) and prevents **concurrent** duplicate runs for one issue. The CLI sets no ID reuse policy (`cli.py`), so a finished issue can be rerun from the CLI; only the queue guards reruns (`ALLOW_DUPLICATE_FAILED_ONLY`). |
-| Workflow code is pure stage logic; all IO in activities | `job.py` (CLAUDE.md rule) | Keeps replay deterministic. |
-| Expected failures are return values, not exceptions (gate FAIL, merge conflict, BLOCKED build, unverifiable build) | `gate.py`, `merge.py`; BLOCKED comes from `run_builder` status (`job.py`); `verify_build` returns a problem string | Temporal retries exceptions. A failed gate is a normal outcome that the workflow should route on, not retry. |
+| One flow run per issue, ID `<flow prefix>-<issue>` (`implement`: `factory-job-<issue>`; `ci-dry-run` has no issue and uses a UTC timestamp) | `flows/registry.py` (`workflow_id`), `cli.py`, `queue.py` | A deterministic ID addresses the job from the CLI (signals/queries) and prevents **concurrent** duplicate runs for one issue. The CLI sets no ID reuse policy (`cli.py`), so a finished issue can be rerun from the CLI; only the queue guards reruns (`ALLOW_DUPLICATE_FAILED_ONLY`). |
+| Workflow code is pure stage logic; all IO in activities | `flows/` (CLAUDE.md rule) | Keeps replay deterministic. |
+| Expected failures are return values, not exceptions (gate FAIL, merge conflict, BLOCKED build, unverifiable build) | `gate.py`, `merge.py`; BLOCKED comes from `run_builder` status (`flows/steps/build.py`); `verify_build` returns a problem string | Temporal retries exceptions. A failed gate is a normal outcome that the workflow should route on, not retry. |
 | Malformed agent output raises `ApplicationError(non_retryable=True)` | `activities/agents.py` | Rerunning the same prompt rarely fixes a broken contract and it costs money. Fail fast and visibly. |
-| Human interaction through signals (`author_replied`, `human_feedback`, `reject`, `pr_merged`) plus `wait_condition` | `job.py:61-76` (signals), `100`, `180` (`wait_condition`) | A job can wait durably for days without holding a worker. |
-| Progress exposed through a `status` query, not activity output | `job.py:56-59`, `queue.py` `status` | `factory.cli status` / `queue-status` read live state without touching history. |
-| Builder session ID kept in workflow state and passed back on retry rounds | `job.py:119` (passed), `121` (stored) | Round N+1 resumes the same Claude conversation (`resume=`). |
-| `route_job` is a **local** activity | `job.py:193-194`; 10 s start-to-close, no retry policy | Pure config lookup, so a full task-queue round-trip isn't worth it. |
+| Human interaction through signals (`author_replied`, `human_feedback`, `reject`, `pr_merged`) plus `wait_condition` | `flows/base.py` (signals), `flows/steps/human.py`, `steps/intake.py` (`wait_condition`) | A job can wait durably for days without holding a worker. |
+| Progress exposed through a `status` query, not activity output | `flows/base.py`, `queue.py` `status` | `factory.cli status` / `queue-status` read live state without touching history. |
+| Builder session ID kept in workflow state and passed back on retry rounds | `flows/steps/build.py` `build_round` | Round N+1 resumes the same Claude conversation (`resume=`). |
+| `route_job` is a **local** activity | `flows/steps/prepare.py`; 10 s start-to-close, no retry policy | Pure config lookup, so a full task-queue round-trip isn't worth it. |
 
-## Queue (`factory/workflows/queue.py`)
+## Queue (`factory/flows/queue.py`)
 
 | Decision | Where | Why |
 |---|---|---|
-| Singleton `FactoryQueueWorkflow` (ID `factory-queue`) polling GitHub every 60s | `queue.py`, `QueueInput.poll_seconds` | Per the module docstring, a port of v2's `cmd_queue` (not checked against the example here). A `poke` signal skips the wait. |
+| Singleton `FactoryQueueWorkflow` (ID `factory-queue`) polling GitHub every 60s | `queue.py`, `QueueInput.poll_seconds` (`core/models.py`) | Per the module docstring, a port of v2's `cmd_queue` (not checked against the example here). A `poke` signal skips the wait; nothing in the repo sends it, so it is sent by hand (UI or `temporal` CLI). |
+| A failed poll doesn't fail the queue | `queue.py` (`except ActivityError`) | `list_queue_issues` failing after its retries (e.g. invalid `config.json`) is logged; nothing is dispatched until the next poll. |
 | Jobs are child workflows with `ParentClosePolicy.ABANDON` | `queue.py` `start_child_workflow` | Restarting or terminating the queue doesn't kill running jobs. |
 | `WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY` | same | A failed job can be retried by the queue. Merged or rejected issues aren't rerun. |
-| Jobs report state back with a `job_state` signal; the queue keeps no child handles | `job.py:_notify`, `queue.py:job_state` | The queue's state stays small and serializable, so it survives `continue_as_new`. |
+| Jobs report state back with a `job_state` signal; the queue keeps no child handles | `flows/base.py:notify`, `queue.py:job_state` | The queue's state stays small and serializable, so it survives `continue_as_new`. |
 | `continue_as_new` when `is_continue_as_new_suggested()` | `queue.py` | Keeps the endlessly polling queue's history bounded. |
 | Concurrency counts only working jobs; `needs-info` and `needs-human` don't hold a slot | `queue.py:_working` | Jobs waiting on people don't block new work. |
 
-## Timeouts and retries (`job.py:27-37`)
+## Timeouts and retries (`flows/options.py`)
 
 | Profile | Timeout | Max attempts | Used for |
 |---|---|---|---|
 | `GIT` | 5 min start-to-close | 5, backoff ×2 | clone, labels, comments, PR, worktree, escalation |
 | `GATE` | 30 min | 2 | `run_gate` (checks command) |
 | `MERGE` | 45 min | 2 | `sync_and_merge`. Idempotent: checks whether the PR is already merged first. |
-| `agent(n)` | n min (intake 15, spec/review/approve 30, builder 60), **heartbeat 3 min** | 2 | Claude agents. The activity heartbeats on every SDK message, so a hung agent is detected within 3 min. Caveat: heartbeats are sent per SDK message (`agents.py`), so a long silent tool call (e.g. the builder running checks for over 3 min) also trips the timeout. |
-| `route_job` (local) | 10 s start-to-close | default (no retry policy set) | `route_job` (`job.py:193-194`) |
+| `agent_opts(n)` | n min (intake 15, spec/review/approve 30, builder 60), **heartbeat 3 min** | 2 | Claude agents. The activity heartbeats on every SDK message, so a hung agent is detected within 3 min. Caveat: heartbeats are sent per SDK message (`agents.py`), so a long silent tool call (e.g. the builder running checks for over 3 min) also trips the timeout. |
+| `route_job` (local) | 10 s start-to-close | default (no retry policy set) | `route_job` (`flows/steps/prepare.py`) |
 | `list_queue_issues` | 2 min | 5, backoff ×2 | queue polling (`queue.py`) |
 
 Activities that can retry are written to be idempotent: `ensure_pr` returns the existing PR, `create_worktree` skips an existing one, `restart_intake` archives only once, and `sync_and_merge` checks the merge state first.
 
 ## Open questions
 - No custom search attributes yet (e.g. `Issue`, `Stage`). They would make the UI filterable and would be the reason for the cache-refresh flag.
-- No worker versioning or patching strategy. Changing `job.py` while jobs are waiting in `needs-human` can break replay.
+- No worker versioning or patching strategy. Changing the activity order of a flow or step while runs are waiting in `needs-human` can break replay (see `factory/flows/CLAUDE.md`).

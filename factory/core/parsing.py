@@ -8,6 +8,7 @@ def first_line(path: Path) -> str | None:
     return path.read_text().split("\n", 1)[0].strip() if path.exists() else None
 
 
+# noinspection DuplicatedCode  - 1:1 port of the header() in examples/software-factory-claude-code-v2/factory/bin/job
 def header(path: Path) -> dict[str, str]:
     """KEY: value lines at the top of a file, up to the first blank line."""
     fields = {}

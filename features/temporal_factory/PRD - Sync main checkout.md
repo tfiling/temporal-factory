@@ -14,11 +14,11 @@ related: "[[PRD - Mount target repo]]"
 With the target repo mounted ([[PRD - Mount target repo]]), intake reads the main checkout at `/data/repo`. That checkout must be a clean, current `main`, not whatever the developer left checked out. Today nothing updates it before intake: no fetch happens before intake at all. The fetches that exist (`create_worktree` `fetch origin <base>` in `git.py`, which runs after intake; `verify_build` `fetch origin <branch>` in `git.py`; `sync_and_merge` `fetch origin <base>` in `merge.py`) only update remote-tracking refs, never the local `main` branch or its files.
 
 ## Goal
-Add a step early in `JobWorkflow`, before intake, that brings the main checkout's `main` up to date with `origin/main`.
+Add a step early in the `implement` flow (`ImplementWorkflow`, type `JobWorkflow`), before intake, that brings the main checkout's `main` up to date with `origin/main`.
 
 ## Requirements
 - **R1** New activity `sync_main` on the git queue, called right after `setup_job` and before intake. It runs `git fetch origin main` and then `git merge --ff-only origin/main` in `/data/repo`. It must be idempotent and fast-forward only.
-- **R2** If the checkout isn't on a clean `main` (wrong branch, dirty, or not fast-forwardable), the step fails with a clear, non-retryable error. It never resets or discards local work. `sync_main` would run with the `GIT` profile (5 attempts, backoff ×2, `job.py`), so it must raise `ApplicationError(non_retryable=True)`; otherwise it retries 5 times.
+- **R2** If the checkout isn't on a clean `main` (wrong branch, dirty, or not fast-forwardable), the step fails with a clear, non-retryable error. It never resets or discards local work. `sync_main` would run with the `GIT` profile (5 attempts, backoff ×2, `flows/options.py`), so it must raise `ApplicationError(non_retryable=True)`; otherwise it retries 5 times.
 - **R3** A single lock serializes `sync_main` and `create_worktree`. Only one of them touches the main repo's `.git` at a time. The lock must work across jobs and across worker processes. Two ways to do it:
   - a Temporal lock workflow that jobs request a lease from (survives restarts and works across workers); or
   - a file lock (`flock` on `/data/repo/.git/factory.lock`) taken inside the two activities (simpler; only valid while every worker shares that filesystem).

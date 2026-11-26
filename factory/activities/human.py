@@ -6,9 +6,9 @@ from pathlib import Path
 from temporalio import activity
 
 from factory.activities.github import MARKER, current_user, gh
-from factory.config import load_config
-from factory.models import EscalateArgs, TextArgs
-from factory.shell import run
+from factory.core.config import load_config
+from factory.core.models import EscalateArgs, TextArgs
+from factory.core.shell import run
 
 
 def _comment(number: int, kind: str, body: str) -> None:

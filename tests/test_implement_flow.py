@@ -1,4 +1,4 @@
-"""JobWorkflow with mocked activities in a time-skipping Temporal test server."""
+"""ImplementWorkflow (type "JobWorkflow") with mocked activities in a time-skipping Temporal test server."""
 
 import asyncio
 import uuid
@@ -7,13 +7,14 @@ from temporalio import activity
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from factory.models import (AGENTS_QUEUE, GIT_QUEUE, ORCHESTRATION_QUEUE, AgentRequest, AgentResult,
-                            BuildResult, DecisionResult, GateResult, IntakeResult, Job, MergeResult,
-                            PrInfo, ReviewResult, Stage)
-from factory.workflows.job import JobWorkflow
+from factory.core.models import (AGENTS_QUEUE, GIT_QUEUE, ORCHESTRATION_QUEUE, AgentRequest, AgentResult,
+                            BuildResult, DecisionResult, GateResult, IntakeResult, Job, LabelChange, MergeResult,
+                            PrInfo, ReviewResult, Stage, FlowName)
+from factory.flows.implement import ImplementWorkflow
 
 JOB = Job("001-x", 1, "x", "/d", "/r", "/w", "factory/001-x", "main", max_rounds=3)
 CALLS: list[str] = []
+LABEL_CHANGES: list = []
 REJECT = ("reject", "no thanks")
 
 
@@ -22,16 +23,22 @@ def make_activities(decision=("ACCEPT",), build="READY", gates=("PASS",), review
     """gates: verdict per round; reviews: verdicts per round (one per lens, in order code, ux);
     approvals: approver decision per call; merges: sync_and_merge outcome per call."""
     CALLS.clear()
+    LABEL_CHANGES.clear()
     decisions, gates, approvals, merges = list(decision), list(gates), list(approvals), list(merges)
 
     def rec(name, value):
         @activity.defn(name=name)
-        async def fn(arg=None):
+        async def fn(_arg=None):
             CALLS.append(name)
             return value() if callable(value) else value
         return fn
 
     lenses = ["code", "ux"]
+
+    @activity.defn(name="edit_labels")
+    async def edit_labels(change: LabelChange) -> None:
+        CALLS.append("edit_labels")
+        LABEL_CHANGES.append(change)
 
     @activity.defn(name="run_reviewer")
     async def run_reviewer(req: AgentRequest) -> ReviewResult:
@@ -46,7 +53,7 @@ def make_activities(decision=("ACCEPT",), build="READY", gates=("PASS",), review
 
     return [
         rec("setup_job", JOB), rec("run_intake", next_intake), rec("route_job", {"code": "haiku", "ux": "sonnet"}),
-        rec("comment_issue", None), rec("edit_labels", None), rec("create_worktree", None),
+        rec("comment_issue", None), edit_labels, rec("create_worktree", None),
         rec("run_spec_writer", AgentResult(cost_usd=1.0)),
         rec("run_builder", BuildResult(build, "stuck" if build == "BLOCKED" else "", AgentResult("s1", 2.0))),
         rec("verify_build", ""), rec("run_gate", lambda: GateResult(gates.pop(0), "abc", 0, [])),
@@ -62,16 +69,16 @@ async def run_job(signals=(), **kw):
     """Runs a job; each (signal, arg) is sent after the job's next escalation, in order."""
     async with await WorkflowEnvironment.start_time_skipping() as env:
         acts = make_activities(**kw)
-        async with (Worker(env.client, task_queue=ORCHESTRATION_QUEUE, workflows=[JobWorkflow], activities=acts),
+        async with (Worker(env.client, task_queue=ORCHESTRATION_QUEUE, workflows=[ImplementWorkflow], activities=acts),
                     Worker(env.client, task_queue=AGENTS_QUEUE, activities=acts),
                     Worker(env.client, task_queue=GIT_QUEUE, activities=acts)):
             handle = await env.client.start_workflow(
-                JobWorkflow.run, 1, id=f"t-{uuid.uuid4()}", task_queue=ORCHESTRATION_QUEUE)
+                ImplementWorkflow.run, 1, id=f"t-{uuid.uuid4()}", task_queue=ORCHESTRATION_QUEUE)
             for i, (name, *arg) in enumerate(signals, start=1):
-                while (await handle.query(JobWorkflow.status))["waits"] < i:
+                while (await handle.query(ImplementWorkflow.status))["waits"] < i:
                     await asyncio.sleep(0.05)
                 await handle.signal(name, *arg)
-            return await handle.result(), await handle.query(JobWorkflow.status)
+            return await handle.result(), await handle.query(ImplementWorkflow.status)
 
 
 async def test_happy_path_approved_and_merged_in_round_one():
@@ -92,6 +99,7 @@ async def test_needs_info_waits_and_rejection_ends_the_job():
 async def test_reject_at_intake():
     stage, _ = await run_job(decision=("REJECT",))
     assert stage == Stage.REJECTED
+    assert LABEL_CHANGES == [LabelChange(1, remove_flow_label=FlowName.IMPLEMENT)]  # edit_labels resolves the label
 
 
 async def test_gate_fail_loops_back_to_build_without_reviewing():

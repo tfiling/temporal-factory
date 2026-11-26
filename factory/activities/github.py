@@ -7,10 +7,11 @@ from pathlib import Path
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from factory.config import data_dir, load_config, target_repo
-from factory.models import Comment, Job, LabelChange, PrInfo, QueueIssue, QueueSnapshot
-from factory.parsing import section
-from factory.shell import run
+from factory.core.config import data_dir, flow_for_labels, load_config, target_repo
+from factory.core.models import (Comment, DryRunInput, FlowName, Job, LabelChange, PrInfo, QueueIssue,
+                                 QueueSnapshot)
+from factory.core.parsing import section
+from factory.core.shell import run
 
 MARKER = "<!-- factory -->"
 
@@ -66,7 +67,7 @@ def _write_issue_md(job_dir, issue: dict) -> None:
 
 @activity.defn
 def setup_job(issue: int) -> Job:
-    """Clone/refresh the target repo, validate the issue, create the job folder and issue.md."""
+    """Clone the target repo if missing, validate the issue, create the job folder and issue.md."""
     cfg = load_config()
     repo = _ensure_repo()
     data = gh_json("issue", "view", str(issue), "--json",
@@ -81,6 +82,19 @@ def setup_job(issue: int) -> Job:
     return Job(id=job_id, issue=issue, title=data["title"], dir=str(job_dir), repo=str(repo),
                worktree=str(repo / ".worktrees" / job_id), branch=f"factory/{job_id}",
                base=cfg.base_branch, max_rounds=cfg.max_rounds)
+
+
+@activity.defn
+def setup_dry_run(inp: DryRunInput) -> Job:
+    """Clone the target repo if missing and create the job folder dry-run-<key> (no issue)."""
+    cfg = load_config()
+    repo = _ensure_repo()
+    job_id = f"dry-run-{inp.key}"
+    job_dir = data_dir() / "jobs" / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    return Job(id=job_id, issue=0, title=f"CI dry run of {inp.base or cfg.base_branch}", dir=str(job_dir),
+               repo=str(repo), worktree=str(repo / ".worktrees" / job_id), branch=f"factory/{job_id}",
+               base=inp.base or cfg.base_branch, max_rounds=1)
 
 
 def current_user() -> str:
@@ -100,15 +114,19 @@ def _replied_since_question(issue: dict, operator: str) -> bool:
 
 @activity.defn
 def list_queue_issues() -> QueueSnapshot:
-    """Open issues carrying the queue label (v2 `cmd_queue`)."""
+    """Open issues carrying any flow's label (v2 `cmd_queue`)."""
     cfg = load_config()
-    issues = gh_json("issue", "list", "--label", cfg.labels.queue, "--state", "open", "--limit", "200",
-                     "--json", "number,labels,author,comments")
+    issues: dict[int, dict] = {i["number"]: i
+                               for label in dict.fromkeys(f.label for f in cfg.flows.values() if f.label)
+                               for i in gh_json("issue", "list", "--label", label, "--state", "open", "--limit",
+                                                "200", "--json", "number,labels,author,comments")}
     operator = current_user()
-    return QueueSnapshot(
-        issues=[QueueIssue(i["number"], cfg.labels.needs_info in {x["name"] for x in i["labels"]},
-                           _replied_since_question(i, operator)) for i in sorted(issues, key=lambda i: i["number"])],
-        concurrency=cfg.concurrency)
+    snapshot = []
+    for n in sorted(issues):
+        labels = [x["name"] for x in issues[n]["labels"]]
+        snapshot.append(QueueIssue(n, cfg.labels.needs_info in labels, _replied_since_question(issues[n], operator),
+                                   flow_for_labels(cfg, labels) or FlowName.IMPLEMENT))
+    return QueueSnapshot(issues=snapshot, concurrency=cfg.concurrency)
 
 
 @activity.defn
@@ -129,12 +147,16 @@ def comment_issue(c: Comment) -> None:
 
 @activity.defn
 def edit_labels(change: LabelChange) -> None:
-    labels = load_config().labels.model_dump()
+    cfg = load_config()
+    remove = [getattr(cfg.labels, k.value) for k in change.remove]
+    flow = cfg.flows.get(change.remove_flow_label) if change.remove_flow_label else None
+    if flow and flow.label:  # no entry or label: nothing to remove; raising would only burn retries
+        remove.append(flow.label)
     args = ["issue", "edit", str(change.number)]
     if change.add:
-        args += ["--add-label", ",".join(labels[k] for k in change.add)]
-    if change.remove:
-        args += ["--remove-label", ",".join(labels[k] for k in change.remove)]
+        args += ["--add-label", ",".join(getattr(cfg.labels, k.value) for k in change.add)]
+    if remove:
+        args += ["--remove-label", ",".join(dict.fromkeys(remove))]
     gh(*args)
 
 
@@ -152,4 +174,6 @@ def ensure_pr(job: Job) -> PrInfo:
     summary = section(spec, "Summary") or ""
     gh("pr", "create", "--draft", "--base", job.base, "--head", job.branch, "--title", title,
         "--body", f"Closes #{job.issue}\n\n{summary}")
-    return existing()
+    if pr := existing():
+        return pr
+    raise ApplicationError(f"PR for branch {job.branch} not found right after creation; retrying")

@@ -1,6 +1,6 @@
 """Map intake's risk and surfaces to the reviewer set (ported from factory/bin/route)."""
 
-from factory.config import FactoryConfig
+from factory.core.config import FactoryConfig
 
 
 def route(cfg: FactoryConfig, risk: str, surfaces: list[str]) -> dict[str, str]:

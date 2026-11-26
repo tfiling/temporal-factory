@@ -30,5 +30,9 @@
     "security": { "security": "opus" }
   },
   "protected_paths": [".github/workflows/*"],
-  "checks_cmd": "bash /app/checks.sh"
+  "checks_cmd": "bash /app/checks.sh",
+  "flows": {
+    "implement": { "label": "factory" },
+    "ci-dry-run": {}
+  }
 }

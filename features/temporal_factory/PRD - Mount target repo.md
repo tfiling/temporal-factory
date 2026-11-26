@@ -26,7 +26,7 @@ Bind-mount the existing local checkout of the target repo at `/data/repo`. For e
 
 | Requirement | Today | Gap |
 |---|---|---|
-| Repo comes from a mount | `_ensure_repo` (`factory/activities/github.py:34`) runs `gh repo clone` into `/data/repo` when `.git` is missing. `docker-compose.yml` mounts only the `factory-data` volume. | Add a bind mount and a host-path variable. Replace the clone with a check that fails clearly when no repo is mounted. |
+| Repo comes from a mount | `_ensure_repo` (`factory/activities/github.py:35`) runs `gh repo clone` into `/data/repo` when `.git` is missing. `docker-compose.yml` mounts only the `factory-data` volume. | Add a bind mount and a host-path variable. Replace the clone with a check that fails clearly when no repo is mounted. |
 | No clone on every run | The clone already happens once per volume, not once per job. It repeats only when the volume is new. | Small win per run. The bigger gain is reusing the local checkout and removing one network and auth step. |
 | `git fetch` | `create_worktree` (`factory/activities/git.py:26`) fetches `origin <base>`, but only **after intake**. | Intake runs with `cwd=/data/repo` (`agents.py:40`) and reads whatever is checked out there. With a mount, that is the developer's working tree, which may be on another branch or dirty. Fetch in `setup_job`, and decide where intake should read (see open questions). |
 | Worktree from the latest `origin/main` | Already done: `git worktree add -b factory/<id> <repo>/.worktrees/<id> origin/<base>` (`git.py:29-31`), excluded through `.git/info/exclude`. | None. The behavior stays the same. |
@@ -50,7 +50,7 @@ Bind-mount the existing local checkout of the target repo at `/data/repo`. For e
 - **Auth:** if the host clone's `origin` is SSH (`git@github.com:…`), the container has no SSH key. `gh auth setup-git` only covers HTTPS. Options: require an HTTPS remote, or fetch and push through `https://github.com/$TARGET_REPO` explicitly.
 - **Intake's view of the repo:** should intake read the developer's working tree, or a clean `origin/main`? A clean read option is a read-only worktree, or `git show origin/main:<path>`.
 - **File ownership:** the container runs as uid 1000 (`Dockerfile`). On Linux hosts the mounted repo has to be writable by that uid. Docker Desktop on macOS handles this (observed on the first run; not verifiable from the repo).
-- **Concurrent fetches:** parallel jobs that fetch the same repo can contend for ref locks. The `GIT` retry policy (5 attempts, `job.py:27-28`) should absorb that, but this needs confirming.
+- **Concurrent fetches:** parallel jobs that fetch the same repo can contend for ref locks. The `GIT` retry policy (5 attempts, `factory/flows/options.py:11-12`) should absorb that, but this needs confirming.
 - **Shared branches:** the local branch `factory/<id>` and its cleanup (`git branch -D` in `cleanup_worktree`, `merge.py:48`) now happen in the developer's repo.
 
 ## Acceptance criteria

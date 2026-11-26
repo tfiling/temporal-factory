@@ -1,5 +1,9 @@
 - ~~Verify and commit the docker compose alignment with the [suggested yaml by temporal](https://github.com/temporalio/temporal-server-operations/blob/main/compose/docker-compose.yml)
     - Effectively done: server, schema, namespace and UI images and health checks are in the compose file ([[docker compose setup#Current setup]])
-    - Still to do: verify manually and commit; `docker-compose.yml` is uncommitted
-- Proper arg parsing in cli.py (currently using argv naive manual parsing)
+    - Still to do: verify manually (`docker-compose.yml` is committed)
+- Proper arg parsing in cli.py (currently using argv naive manual parsing): [[Choose a CLI library]]
 - Implement a skill that will make sure the diagrams e.g. [[Pipeline flow]] are up to date
+- Separate Stage enum per workflow
+- refactor build.build_round() - too long
+- Make sure that in CI dry run we will see the tests failed in temporal
+- 

@@ -20,15 +20,30 @@ class Stage(str, Enum):
     NEEDS_HUMAN = "needs-human"
     MERGED = "merged"
     REJECTED = "rejected"
-    FAILED = "failed"  # only sent via _notify, never stored in JobWorkflow.stage
+    FAILED = "failed"  # only sent via notify, never stored in a flow's stage
     RESUMING = "resuming"  # set by FactoryQueueWorkflow only
+    CHECKS = "checks"  # CI dry run: running the gate on the base branch
+    PASSED = "passed"  # CI dry run: terminal
+    CHECKS_FAILED = "checks-failed"  # CI dry run: terminal
 
+
+class LabelKind(str, Enum):
+    """A key of config `labels`."""
+    QUEUE = "queue"
+    NEEDS_INFO = "needs_info"
+    NEEDS_HUMAN = "needs_human"
+
+
+class FlowName(str, Enum):
+    """A key of config `flows` and of flows/registry.py `FLOWS`."""
+    IMPLEMENT = "implement"
+    CI_DRY_RUN = "ci-dry-run"
 
 
 @dataclass
 class Job:
     id: str
-    issue: int
+    issue: int  # 0 when the flow has no issue (CI dry run)
     title: str
     dir: str
     repo: str
@@ -36,6 +51,12 @@ class Job:
     branch: str
     base: str
     max_rounds: int = 3
+
+
+@dataclass
+class DryRunInput:
+    base: str | None = None  # default: config base_branch
+    key: str = ""  # job folder suffix; the workflow sets it from its start time when empty
 
 
 @dataclass
@@ -140,6 +161,7 @@ class QueueIssue:
     number: int
     needs_info: bool  # labeled factory:needs-info
     replied: bool  # the author or operator commented after the factory's last comment
+    flow: FlowName = FlowName.IMPLEMENT  # picked from the issue's labels (config `flows`)
 
 
 @dataclass
@@ -150,16 +172,17 @@ class QueueSnapshot:
 
 @dataclass
 class JobState:
-    """Sent by a JobWorkflow to the queue whenever it starts waiting, resumes or ends."""
+    """Sent by a flow to the queue whenever it starts waiting, resumes or ends."""
     issue: int
     stage: Stage
     cost_usd: float = 0.0
+    workflow_id: str = ""  # empty in states sent before flows existed: means factory-job-<issue>
 
 
 @dataclass
 class QueueInput:
     poll_seconds: float = 60.0
-    jobs: dict[str, JobState] = field(default_factory=dict)  # carried across continue-as-new
+    jobs: dict[str, JobState] = field(default_factory=dict)  # by workflow id; carried across continue-as-new
 
 
 @dataclass
@@ -171,5 +194,6 @@ class Comment:
 @dataclass
 class LabelChange:
     number: int
-    add: list[str] = field(default_factory=list)  # label kinds: queue | needs_info | needs_human
-    remove: list[str] = field(default_factory=list)
+    add: list[LabelKind] = field(default_factory=list)
+    remove: list[LabelKind] = field(default_factory=list)
+    remove_flow_label: FlowName | None = None  # also remove this flow's trigger label (flows.<name>.label)
